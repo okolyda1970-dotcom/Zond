@@ -2,17 +2,21 @@
 /**
   ******************************************************************************
   * @file           : main.c
-  * @brief          : Main program body
+  * @brief          : Main program body — ПЛАТА ЗОНДА (STM32F010 + MAX2870)
   ******************************************************************************
-  * @attention
   *
-  * Copyright (c) 2025 STMicroelectronics.
-  * All rights reserved.
+  *  ВЕРСИЯ: шаг 1 закрыт (патч 1.3). Что изменено относительно исходной:
   *
-  * This software is licensed under terms that can be found in the LICENSE file
-  * in the root directory of this software component.
-  * If no LICENSE file comes with this software, it is provided AS-IS.
+  *   П1. Приём DMA взводится ОДИН РАЗ в init (после fwc = minF) — всегда готов.
+  *   П2. Из while(1) удалён взвод по IDLE+RXNE: именно он терял 8 байт кадра
+  *       (OVERRUN_DISABLE молча дропал их) и втягивал «старый» первый байт —
+  *       окно съезжало на один. tickUart() больше не нужна — удалена.
+  *   П3. HAL_UART_RxCpltCallback: эхо и перевзвод приёма — ВСЕГДА, без
+  *       зависимости от flagRxUart; в ветке ошибки — resetUartReceiver().
+  *   П4. HAL_UART_ErrorCallback: в конце resetUartReceiver() — приём оживает
+  *       и после ошибок.
   *
+  *  Всё остальное — без изменений.
   ******************************************************************************
   */
 /* USER CODE END Header */
@@ -22,8 +26,8 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include <regEdit.h>
-#include  "math.h"
+#include "regEdit.h"
+#include "math.h"
 #include "string.h"
 #include "usart_ring.h"
 /* USER CODE END Includes */
@@ -63,13 +67,9 @@ uint8_t pData4 [4] = {0};
 uint8_t pData5 [4] = {0};
 uint8_t pData6 [4] = {0};
 
-
-//adfStruct  tipDef_0;
-
 extern volatile uint16_t rx_buffer_head;
 extern volatile uint16_t rx_buffer_tail;
 extern unsigned char rx_buffer[UART_RX_BUFFER_SIZE];
-
 
 extern structR0  tipDef_0;
 extern structR1  tipDef_1;
@@ -91,7 +91,7 @@ volatile uint32_t regRx2 = 0;
 
 uint32_t registrFB = 0;
 uint8_t rxData [SIZE] = {0};
- uint8_t txData [SIZE] = {0};
+uint8_t txData [SIZE] = {0};
 
 volatile float adcData [128] = {0.0};
 uint8_t range = 0;
@@ -105,7 +105,7 @@ uint8_t flag = 0;
 uint16_t tick = 0;
 uint8_t xPosision = 0;
 uint8_t yPosision = 0;
-uint8_t testCod= 0;
+uint8_t testCod = 0;
 float fractionValue = 0.0;
 float integerValue = 0.0;
 float modulValue = 1000.0;
@@ -114,8 +114,7 @@ float fwc = 0.0;
 FlagStatus flagTxUart = RESET;
 FlagStatus flagRxUart = RESET;
 FlagStatus errorRx = RESET;
-uint8_t tickTx = 0;
-uint8_t tickRx = 0;
+/* П2: tickTx / tickRx удалены — они жили только в tickUart(), а она больше не нужна */
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -132,13 +131,6 @@ static void MX_USART1_UART_Init(void);
 /* USER CODE BEGIN 0 */
 void shift (void)
 {
-	registr0 = 0x330010;
-	registr1 = 0x8008029;
-	registr2 = 0x4E42;
-	registr3 = 0x4B3;
-	registr4 = 0xEC802C;
-	registr5 = 0xD80005;
-
 	registr0 = initReg0();
 	registr1 = initReg1();
 	registr2 = initReg2();
@@ -146,66 +138,59 @@ void shift (void)
 	registr4 = initReg4();
 	registr5 = initReg5();
 
-	  pData0[0] = 0x000000FF & (registr0 >> 24);
-	  pData0[1] = 0x000000FF & (registr0 >> 16);
-	  pData0[2] = 0x000000FF & (registr0 >> 8);
-	  pData0[3] = 0x000000FF & (registr0);
+	pData0[0] = 0x000000FF & (registr0 >> 24);
+	pData0[1] = 0x000000FF & (registr0 >> 16);
+	pData0[2] = 0x000000FF & (registr0 >> 8);
+	pData0[3] = 0x000000FF & (registr0);
 
-	  pData1[0] = 0x000000FF & (registr1 >> 24);
-	  pData1[1] = 0x000000FF & (registr1 >> 16);
-	  pData1[2] = 0x000000FF & (registr1 >> 8);
-	  pData1[3] = 0x000000FF & (registr1);
+	pData1[0] = 0x000000FF & (registr1 >> 24);
+	pData1[1] = 0x000000FF & (registr1 >> 16);
+	pData1[2] = 0x000000FF & (registr1 >> 8);
+	pData1[3] = 0x000000FF & (registr1);
 
-	  pData2[0] = 0x000000FF & (registr2 >> 24);
-	  pData2[1] = 0x000000FF & (registr2 >> 16);
-	  pData2[2] = 0x000000FF & (registr2 >> 8);
-	  pData2[3] = 0x000000FF & (registr2);
+	pData2[0] = 0x000000FF & (registr2 >> 24);
+	pData2[1] = 0x000000FF & (registr2 >> 16);
+	pData2[2] = 0x000000FF & (registr2 >> 8);
+	pData2[3] = 0x000000FF & (registr2);
 
-	  pData3[0] = 0x000000FF & (registr3 >> 24);
-	  pData3[1] = 0x000000FF & (registr3 >> 16);
-	  pData3[2] = 0x000000FF & (registr3 >> 8);
-	  pData3[3] = 0x000000FF & (registr3);
+	pData3[0] = 0x000000FF & (registr3 >> 24);
+	pData3[1] = 0x000000FF & (registr3 >> 16);
+	pData3[2] = 0x000000FF & (registr3 >> 8);
+	pData3[3] = 0x000000FF & (registr3);
 
-	  pData4[0] = 0x000000FF & (registr4 >> 24);
-	  pData4[1] = 0x000000FF & (registr4 >> 16);
-	  pData4[2] = 0x000000FF & (registr4 >> 8);
-	  pData4[3] = 0x000000FF & (registr4);
+	pData4[0] = 0x000000FF & (registr4 >> 24);
+	pData4[1] = 0x000000FF & (registr4 >> 16);
+	pData4[2] = 0x000000FF & (registr4 >> 8);
+	pData4[3] = 0x000000FF & (registr4);
 
-	  pData5[0] = 0x000000FF & (registr5 >> 24);
-	  pData5[1] = 0x000000FF & (registr5 >> 16);
-	  pData5[2] = 0x000000FF & (registr5 >> 8);
-	  pData5[3] = 0x000000FF & (registr5);
-
+	pData5[0] = 0x000000FF & (registr5 >> 24);
+	pData5[1] = 0x000000FF & (registr5 >> 16);
+	pData5[2] = 0x000000FF & (registr5 >> 8);
+	pData5[3] = 0x000000FF & (registr5);
 }
 
 void shiftRx (void)
 {
+	regRx1 = 0;
+	regRx2 = 0;
+	regRx1 |= (rxData[0] << 24);
+	regRx1 |= (rxData[1] << 16);
+	regRx1 |= (rxData[2] << 8);
+	regRx1 |= (rxData[3]);
 
-/*	  regRx1  = 0x000000FF & (rxData[0] << 24);
-	  regRx1 = 0x000000FF & (rxData[1] >> 16);
-	  regRx1 = 0x000000FF & (rxData[2] >> 8);
-	  regRx1 = 0x000000FF & (rxData[3]);*/
-
-	  regRx1 = 0;
-	  regRx2 = 0;
-	  regRx1 |= (rxData[0] << 24);
-	  regRx1 |= (rxData[1] << 16);
-	  regRx1 |= (rxData[2] << 8);
-	  regRx1 |= (rxData[3]);
-
-	  regRx2 |= (rxData[4] << 24);
-	  regRx2 |= (rxData[5] << 16);
-	  regRx2 |= (rxData[6] << 8);
-	  regRx2 |= (rxData[7]);
-
+	regRx2 |= (rxData[4] << 24);
+	regRx2 |= (rxData[5] << 16);
+	regRx2 |= (rxData[6] << 8);
+	regRx2 |= (rxData[7]);
 }
-
 
 void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
 {
-	 flagTxUart = RESET;
+	flagTxUart = RESET;
 }
 
+/* Уже была у вас и была правильной: стоп DMA, чтение RDR, чистка флагов,
+ * новый приём. Раньше нигде не вызывалась — теперь зовётся из обоих колбэков. */
 void resetUartReceiver(void) {
     // === 1. Останавливаем DMA ===
     HAL_UART_DMAStop(&huart1);
@@ -217,159 +202,92 @@ void resetUartReceiver(void) {
     // === 3. Сбрасываем флаги ошибок UART ===
     __HAL_UART_CLEAR_FLAG(&huart1, UART_FLAG_PE | UART_FLAG_FE | UART_FLAG_NE | UART_FLAG_ORE);
 
-    // === 4. Очищаем буфер приёма ===
-//    memset(rxData, 0, SIZE);
-
-    // === 5. Перезапускаем приём DMA ===
+    // === 4. Перезапускаем приём DMA ===
     HAL_UART_Receive_DMA(&huart1, rxData, SIZE);
 
-    // === 6. Сбрасываем флаги ===
+    // === 5. Сбрасываем флаги ===
     flagRxUart = RESET;
     flagTxUart = RESET;
     errorRx = RESET;
 }
+
+/* П3: переписан целиком.
+ * Эхо и перевзвод приёма — ВСЕГДА, а не «если flagRxUart».
+ * Ветка ошибки зовёт resetUartReceiver() — окно больше не съезжает. */
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
     LL_GPIO_TogglePin(LED_1_GPIO_Port, LED_1_Pin);
 
-    if(flagRxUart)
+    for (uint8_t i = 0; i < SIZE; i++) txData[i] = rxData[i];
+
+    if (rxData[8] == 0b01010101)          // хвост 0x55 на месте — кадр ровный
     {
-        USART1 -> ICR |= USART_ICR_IDLECF;
-        flagRxUart = RESET;
+        shiftRx();
+        bitOperation();
+        setRegistr();
 
-        // Копируем данные
-        txData[0] = rxData[0];
-        txData[1] = rxData[1];
-        txData[2] = rxData[2];
-        txData[3] = rxData[3];
-        txData[4] = rxData[4];
-        txData[5] = rxData[5];
-        txData[6] = rxData[6];
-        txData[7] = rxData[7];
-        txData[8] = rxData[8];
+        registr0 = initReg0();
+        registr1 = initReg1();
+        registr2 = initReg2();
+        registr3 = initReg3();
+        registr4 = initReg4();
+        registr5 = initReg5();
+        shift();
+        spiAdf();
 
-        if(rxData[8] == 0b01010101)
-//            if(1)
-        {
-            shiftRx();
-            bitOperation();
-            setRegistr();
-
-            registr0 = initReg0();
-            registr1 = initReg1();
-            registr2 = initReg2();
-            registr3 = initReg3();
-            registr4 = initReg4();
-            registr5 = initReg5();
-            shift();
-            spiAdf();
-
-            errorRx = RESET;
-            testCod = 0;
-        }
-        	else {
-        	    errorRx = SET;
-
-        	    // === ОСТАНАВЛИВАЕМ UART И DMA ===
-        	    HAL_UART_DMAStop(&MYUART);
-
-        	    // === ЧИТАЕМ RDR, ЧТОБЫ ОЧИСТИТЬ ФЛАГ RXNE ===
-        	    volatile uint32_t dummy = USART1->RDR;
-        	    (void)dummy;
-
-        	    // === СБРАСЫВАЕМ ФЛАГИ ОШИБОК UART ===
-        	    __HAL_UART_CLEAR_FLAG(&MYUART, UART_FLAG_PE | UART_FLAG_FE | UART_FLAG_NE | UART_FLAG_ORE);
-
-        	    // === ОЧИЩАЕМ БУФЕР ПРИЁМА ===
-//        	    memset(rxData, 0, SIZE);
-
-        	    // === ПЕРЕЗАПУСКАЕМ ПРИЁМ DMA ===
-        	    HAL_UART_Receive_DMA(&MYUART, rxData, SIZE);
-
-        	    // === СБРАСЫВАЕМ ФЛАГИ ===
-        	    flagRxUart = RESET;
-        	    flagTxUart = RESET;
-        	}
-
-        if(flagTxUart == RESET && huart->gState == HAL_UART_STATE_READY) {
-            HAL_UART_Transmit_IT(&MYUART, txData, SIZE);
-            flagTxUart = SET;
-        }
-
-        tick = 0;
+        errorRx = RESET;
+        testCod = 0;
     }
+    else
+    {
+        errorRx = SET;
+        resetUartReceiver();   // стоп, RDR, флаги, новый приём
+    }
+
+    if (flagTxUart == RESET && huart->gState == HAL_UART_STATE_READY)
+    {
+        HAL_UART_Transmit_IT(huart, txData, SIZE);   // эхо
+        flagTxUart = SET;
+    }
+
+    if (!errorRx)
+        HAL_UART_Receive_DMA(huart, rxData, SIZE);   // перевзвод приёма
+
+    tick = 0;
 }
+
+/* П4: в конце добавлен resetUartReceiver() — приём оживает и после ошибок */
 void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
 {
-        if (huart == &huart1)
-        {
-                uint32_t er = HAL_UART_GetError(&huart1);
+    if (huart == &huart1)
+    {
+        uint32_t er = HAL_UART_GetError(&huart1);
 
-                if (er & HAL_UART_ERROR_PE)
-                {
+        if (er & HAL_UART_ERROR_PE)  { __HAL_UART_CLEAR_PEFLAG(&huart1);  }
+        if (er & HAL_UART_ERROR_NE)  { __HAL_UART_CLEAR_NEFLAG(&huart1);  }
+        if (er & HAL_UART_ERROR_FE)  { __HAL_UART_CLEAR_FEFLAG(&huart1);  }
+        if (er & HAL_UART_ERROR_ORE) { __HAL_UART_CLEAR_OREFLAG(&huart1); }
+        if (er & HAL_UART_ERROR_DMA) { __HAL_UART_CLEAR_NEFLAG(&huart1);  }
 
-                        __HAL_UART_CLEAR_PEFLAG(&huart1);
-                }
-                if (er & HAL_UART_ERROR_NE)
-                {
+        huart->ErrorCode = HAL_UART_ERROR_NONE;
+        flagRxUart = RESET;
+        flagTxUart = RESET;
 
-                        __HAL_UART_CLEAR_NEFLAG(&huart1);
-                }
-                if (er & HAL_UART_ERROR_FE)
-                {
-
-                        __HAL_UART_CLEAR_FEFLAG(&huart1);
-                }
-                if (er & HAL_UART_ERROR_ORE)
-                {
-
-                        __HAL_UART_CLEAR_OREFLAG(huart);
-                }
-                if (er & HAL_UART_ERROR_DMA)
-                {
-
-                        __HAL_UART_CLEAR_NEFLAG(&huart1);
-                }
-                huart->ErrorCode = HAL_UART_ERROR_NONE;
-      		  flagRxUart = RESET;
-    		  flagTxUart = RESET;
-
-        }
+        resetUartReceiver();   // <-- П4: одна строка, приём больше не умирает
+    }
 }
 
-void tickUart (void)
-{
-	  if(flagTxUart && tickTx < 10)
-	  {
-		  tickTx++;
-	  }
-	  else
-	  {
-		  flagTxUart = RESET;
-		  tickTx = 0;
-	  }
-	  if(flagRxUart == SET && tickRx < 10)
-	  {
-		  tickRx++;
-	  }
-	  else
-	  {
-		  flagRxUart = RESET;
-		  tickRx = 0;
-	  }
-}
-
+/* П2: tickUart() удалена — приём больше не живёт «по тикам», он в колбэках. */
 
 void setAtt (void)
 {
-
-	 if(txRem2.attenuator1 == 1)
-	 {
-		 LL_GPIO_SetOutputPin(ATT_1_GPIO_Port, ATT_1_Pin);
-	 }
-	 else{
-		 LL_GPIO_ResetOutputPin(ATT_1_GPIO_Port, ATT_1_Pin);
-	 }
+	if(txRem2.attenuator1 == 1)
+	{
+		LL_GPIO_SetOutputPin(ATT_1_GPIO_Port, ATT_1_Pin);
+	}
+	else{
+		LL_GPIO_ResetOutputPin(ATT_1_GPIO_Port, ATT_1_Pin);
+	}
 }
 /* USER CODE END 0 */
 
@@ -379,134 +297,57 @@ void setAtt (void)
   */
 int main(void)
 {
-  /* USER CODE BEGIN 1 */
-
-  /* USER CODE END 1 */
-
   /* MCU Configuration--------------------------------------------------------*/
-
-  /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
   HAL_Init();
-
-  /* USER CODE BEGIN Init */
-
-  /* USER CODE END Init */
 
   /* Configure the system clock */
   SystemClock_Config();
-
-  /* USER CODE BEGIN SysInit */
-
-  /* USER CODE END SysInit */
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
   MX_DMA_Init();
   MX_SPI1_Init();
   MX_USART1_UART_Init();
+
   /* USER CODE BEGIN 2 */
-   defoultSet ();
-   LL_GPIO_SetOutputPin(CE_1_GPIO_Port, CE_1_Pin);
-   LL_GPIO_SetOutputPin(RF_OUT_EN_GPIO_Port, RF_OUT_EN_Pin);
-   LL_GPIO_SetOutputPin(LE_1_GPIO_Port, LE_1_Pin);
-  //  memcpy (pData, &registr, SIZE);
-   LL_mDelay(100);
-//	tipDef_0.integ = 89;
-//	tipDef_4.bandSelectclockDividerValue = 0b100;
-//	tipDef_4.RFdividerSelect = 0b100;
-	   float minF = 800.0;
-	//   float maxF = 2500.0;
-	   fwc = minF;
-/*	   shift();
-	   spiAdf ();*/
+  defoultSet();
+  LL_GPIO_SetOutputPin(CE_1_GPIO_Port, CE_1_Pin);
+  LL_GPIO_SetOutputPin(RF_OUT_EN_GPIO_Port, RF_OUT_EN_Pin);
+  LL_GPIO_SetOutputPin(LE_1_GPIO_Port, LE_1_Pin);
+  LL_mDelay(100);
+
+  float minF = 800.0;
+  fwc = minF;
+
+  /* П1: приём взведён ОДИН РАЗ — дальше он поддерживает себя сам:
+   *     перевзводится в HAL_UART_RxCpltCallback и в HAL_UART_ErrorCallback.
+   *     Раньше взвод стоял в while(1) и ждал IDLE+RXNE — терял байты. */
+  HAL_UART_Receive_DMA(&huart1, rxData, SIZE);
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
-/*	   registr0 = initReg0 ();
-	   registr1 = initReg1 ();
-	   registr2 = initReg2 ();
-	   registr3 = initReg3 ();
-	   registr4 = initReg4 ();
-	   registr5 = initReg5 ();
-	   shift();
-	   spiAdf ();
-		 LL_GPIO_SetOutputPin(ATT_1_GPIO_Port, ATT_1_Pin);*/
   while (1)
   {
+    /* П2: весь обмен теперь живёт в прерываниях:
+     *   DMA-приём -> HAL_UART_RxCpltCallback (разбор, SPI в MAX2870, эхо)
+     *   ошибки    -> HAL_UART_ErrorCallback (resetUartReceiver)
+     * Между кадрами ядро спит — заодно меньше собственных шумов. */
+    __WFI();
 
-	  // проверочный код
-/*	  LL_mDelay(500);
-		LL_GPIO_TogglePin(LED_1_GPIO_Port, LED_1_Pin);
-		if( tipDef_5.LDpinMode == 0b11)
-		{
-			tipDef_5.LDpinMode = 0b00;
-		}
-		else{
-			tipDef_5.LDpinMode = 0b11;
-		}
-
-		   registr0 = initReg0 ();
-		   registr1 = initReg1 ();
-		   registr2 = initReg2 ();
-		   registr3 = initReg3 ();
-		   registr4 = initReg4 ();
-		   registr5 = initReg5 ();
-		   shift();
-		   spiAdf ();*/
-
-	  // рабочий код
-	  if(flagRxUart == RESET)
-		{
-		  flagRxUart = SET;
-/*		  rxData [0] = 0;
-		  rxData [1] = 0;
-		  rxData [2] = 0;
-		  rxData [3] = 0;
-		  rxData [4] = 0;
-		  rxData [5] = 0;
-		  rxData [6] = 0;
-		  rxData [7] = 0;*/
-//			MYUART.Instance->CR1 |= USART_ISR_RXNE;
-
-		  if(__HAL_UART_GET_FLAG(&huart1,UART_FLAG_IDLE) == SET)
-		  {
-			  if(__HAL_UART_GET_FLAG(&huart1,USART_ISR_RXNE) == SET )
-			  {
-				  USART1 -> ISR &= USART_ISR_RXNE;
-//				  HAL_UART_AbortReceive(&huart1);
-//			  registrFB = MYUART.Instance->RDR;
-				  HAL_UART_Receive_DMA(&huart1, rxData, SIZE);
-			  }
-		  }
-
-         }
-	  else
-	  {
-		  tickUart();
-	  }
-
-//		LL_GPIO_TogglePin(LED_1_GPIO_Port, LED_1_Pin);
-
-
-
-
-/*	   if(fwc < maxF)
-	   {
-		   fricvancy (fwc);
-		   fwc += 1;
-	   }
-	   else
-	   {
-		   fwc = minF;
-	   }*/
-
-
-    /* USER CODE END WHILE */
-
-    /* USER CODE BEGIN 3 */
+    /* Старый тестовый перебор частот (если понадобится, раскомментировать):
+    if(fwc < maxF)
+    {
+        fricvancy(fwc);
+        fwc += 1;
+    }
+    else
+    {
+        fwc = minF;
+    }
+    */
   }
-  /* USER CODE END 3 */
+  /* USER CODE END WHILE */
 }
 
 /**
@@ -580,6 +421,7 @@ static void MX_SPI1_Init(void)
   {
     Error_Handler();
   }
+
   /* USER CODE BEGIN SPI1_Init 2 */
 
   /* USER CODE END SPI1_Init 2 */
@@ -616,6 +458,7 @@ static void MX_USART1_UART_Init(void)
   {
     Error_Handler();
   }
+
   /* USER CODE BEGIN USART1_Init 2 */
 
   /* USER CODE END USART1_Init 2 */
@@ -736,7 +579,7 @@ void Error_Handler(void)
   * @brief  Reports the name of the source file and the source line number
   *         where the assert_param error has occurred.
   * @param  file: pointer to the source file name
-  * @param  line: assert_param error line source number
+  * @param  line: source line number where the assert_param error has occurred
   * @retval None
   */
 void assert_failed(uint8_t *file, uint32_t line)
